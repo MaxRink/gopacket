@@ -211,3 +211,21 @@ func TestLLDPMandatoryTLVs(t *testing.T) {
 		}
 	}
 }
+
+// The OID string length is added to the address string length as int: with
+// mlen 200 and olen 60 the uint8 sum wrapped to 11 and the OID slice
+// panicked.
+func TestLLDPDecodeMgmtAddressOIDLength(t *testing.T) {
+	v := make([]byte, 207) // mlen byte, 200 address bytes, interface subtype and number, olen
+	v[0], v[1], v[206] = 200, 1, 60
+	data := lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, lldpTLV(LLDPTLVMgmtAddress, v...), lldpTestEnd)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic: %v", r)
+		}
+	}()
+	p := gopacket.NewPacket(data, LayerTypeLinkLayerDiscovery, gopacket.DecodeOptions{SkipDecodeRecovery: true})
+	if p.ErrorLayer() == nil {
+		t.Error("no decode error for an OID past the TLV")
+	}
+}
