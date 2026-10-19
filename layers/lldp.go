@@ -803,6 +803,12 @@ func decodeLinkLayerDiscovery(data []byte, p gopacket.PacketBuilder) error {
 	vData := data[0:]
 	for len(vData) > 0 {
 		if len(vData) < 2 {
+			// The End TLV is optional: an LLDPDU without it in a
+			// minimum-size Ethernet frame can be followed by one byte of
+			// zero padding (two or more decode as an End TLV).
+			if vData[0] == 0 && len(vals) > 0 {
+				break
+			}
 			p.SetTruncated()
 			return errors.New("LLDP vdata < 2 bytes")
 		}

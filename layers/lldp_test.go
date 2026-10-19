@@ -229,3 +229,27 @@ func TestLLDPDecodeMgmtAddressOIDLength(t *testing.T) {
 		t.Error("no decode error for an OID past the TLV")
 	}
 }
+
+// A 45-byte LLDPDU without End TLV in a minimum-size Ethernet frame (60
+// bytes without FCS) is followed by one byte of zero padding.
+func TestLLDPOnePaddingByteWithoutEnd(t *testing.T) {
+	lldpdu := lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, lldpTLV(LLDPTLVSysName, make([]byte, 23)...))
+	if len(lldpdu) != 45 {
+		t.Fatalf("LLDPDU is %d bytes, want 45", len(lldpdu))
+	}
+	eth := []byte{0x01, 0x80, 0xc2, 0x00, 0x00, 0x0e, 0x02, 0, 0, 0, 0, 1, 0x88, 0xcc}
+	frame := lldpCat(eth, lldpdu, []byte{0})
+	p := gopacket.NewPacket(frame, LinkTypeEthernet, gopacket.Default)
+	l, ok := p.Layer(LayerTypeLinkLayerDiscovery).(*LinkLayerDiscovery)
+	if !ok {
+		t.Fatalf("not decoded: %v", p.ErrorLayer())
+	}
+	if l.TTL != 120 || string(l.PortID.ID) != "Eth1" {
+		t.Errorf("TTL %d port %q", l.TTL, l.PortID.ID)
+	}
+	// One non-zero byte is still a truncated TLV.
+	frame[len(frame)-1] = 0x02
+	if p := gopacket.NewPacket(frame, LinkTypeEthernet, gopacket.Default); p.Layer(LayerTypeLinkLayerDiscovery) != nil {
+		t.Error("one non-zero trailing byte accepted")
+	}
+}
