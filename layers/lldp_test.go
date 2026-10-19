@@ -5,6 +5,7 @@
 package layers
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -86,5 +87,97 @@ func TestPacketLLDP(t *testing.T) {
 func BenchmarkDecodePacketLLDP(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		gopacket.NewPacket(testPacketLLDP, LinkTypeEthernet, gopacket.NoCopy)
+	}
+}
+
+func lldpTLV(t LLDPTLVType, v ...byte) []byte {
+	h := uint16(t)<<9 | uint16(len(v))
+	return append([]byte{byte(h >> 8), byte(h)}, v...)
+}
+
+func lldpOrgTLV(oui IEEEOUI, subtype byte, v ...byte) []byte {
+	return lldpTLV(LLDPTLVOrgSpecific, append([]byte{byte(oui >> 16), byte(oui >> 8), byte(oui), subtype}, v...)...)
+}
+
+func lldpCat(parts ...[]byte) []byte {
+	var b []byte
+	for _, p := range parts {
+		b = append(b, p...)
+	}
+	return b
+}
+
+var (
+	lldpTestChassis = lldpTLV(LLDPTLVChassisID, 4, 0, 0x11, 0x22, 0x33, 0x44, 0x55)
+	lldpTestPort    = lldpTLV(LLDPTLVPortID, 5, 'E', 't', 'h', '1')
+	lldpTestTTL     = lldpTLV(LLDPTLVTTL, 0, 120)
+	lldpTestEnd     = lldpTLV(LLDPTLVEnd)
+)
+
+// Short TLVs from the wire must give an error, not a panic: the Decode*
+// methods run outside the packet decoder's panic recovery.
+func TestLLDPDecodeShortTLVs(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		tlv     []byte
+		decode  func(*LinkLayerDiscoveryInfo) error
+		wantErr bool
+	}{
+		{"802.1 VLAN name, 2 bytes", lldpOrgTLV(IEEEOUI8021, LLDP8021SubtypeVLANName, 0, 10),
+			func(i *LinkLayerDiscoveryInfo) error { _, err := i.Decode8021(); return err }, true},
+		{"802.1 protocol identity, length past the end", lldpOrgTLV(IEEEOUI8021, LLDP8021SubtypeProtocolIdentity, 5, 1),
+			func(i *LinkLayerDiscoveryInfo) error { _, err := i.Decode8021(); return err }, true},
+		// The extended power fields need 8 bytes; with 7 the decoder read
+		// the header of the next TLV.
+		{"802.3 MDI power, 7 bytes", lldpCat(lldpOrgTLV(IEEEOUI8023, LLDP8023SubtypeMDIPower, 0x0f, 1, 3, 0, 0, 0, 0), lldpTLV(LLDPTLVSysName, 'x')),
+			func(i *LinkLayerDiscoveryInfo) error {
+				d, err := i.Decode8023()
+				if err == nil && d.PowerViaMDI.Allocated != 0 {
+					err = fmt.Errorf("read past the TLV: allocated %d", d.PowerViaMDI.Allocated)
+				}
+				return err
+			}, false},
+		{"MED civic location, 3 bytes after the format", lldpOrgTLV(IEEEOUIMedia, uint8(LLDPMediaTypeLocation), byte(LLDPLocationFormatAddress), 0, 'U', 'S'),
+			func(i *LinkLayerDiscoveryInfo) error { _, err := i.DecodeMedia(); return err }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := gopacket.NewPacket(lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, c.tlv, lldpTestEnd), LayerTypeLinkLayerDiscovery, gopacket.Default)
+			info, ok := p.Layer(LayerTypeLinkLayerDiscoveryInfo).(*LinkLayerDiscoveryInfo)
+			if !ok {
+				t.Fatalf("no LinkLayerDiscoveryInfo layer: %v", p.ErrorLayer())
+			}
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("panic: %v", r)
+					}
+				}()
+				err = c.decode(info)
+			}()
+			if (err != nil) != c.wantErr {
+				t.Errorf("error %v, want error %v", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// A management address string length of 0, or one whose sum with the
+// fixed fields overflows a byte, must give an error, not a panic.
+func TestLLDPDecodeMgmtAddressLength(t *testing.T) {
+	for _, mlen := range []byte{0, 249, 255} {
+		data := lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL,
+			lldpTLV(LLDPTLVMgmtAddress, mlen, 1, 192, 0, 2, 1, 2, 0, 0, 0, 1, 0), lldpTestEnd)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("mlen %d: panic: %v", mlen, r)
+				}
+			}()
+			p := gopacket.NewPacket(data, LayerTypeLinkLayerDiscovery, gopacket.DecodeOptions{SkipDecodeRecovery: true})
+			if p.ErrorLayer() == nil {
+				t.Errorf("mlen %d: no decode error", mlen)
+			}
+		}()
 	}
 }
