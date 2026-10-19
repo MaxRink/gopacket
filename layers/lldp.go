@@ -825,15 +825,18 @@ func decodeLinkLayerDiscovery(data []byte, p gopacket.PacketBuilder) error {
 		}
 		vData = vData[2+val.Length:]
 	}
-	if len(vals) < 4 {
+	// IEEE 802.1AB-2016: Chassis ID, Port ID and TTL are the first three
+	// TLVs, in this order, each exactly once; the End TLV is optional.
+	if len(vals) < 3 || vals[0].Type != LLDPTLVChassisID || vals[1].Type != LLDPTLVPortID || vals[2].Type != LLDPTLVTTL {
 		return errors.New("Missing mandatory LinkLayerDiscovery TLV")
 	}
 	c := &LinkLayerDiscovery{}
-	gotEnd := false
-	for _, v := range vals {
+	for i, v := range vals {
+		if i > 2 && (v.Type == LLDPTLVChassisID || v.Type == LLDPTLVPortID || v.Type == LLDPTLVTTL) {
+			return errors.New("Repeated mandatory LinkLayerDiscovery TLV")
+		}
 		switch v.Type {
 		case LLDPTLVEnd:
-			gotEnd = true
 		case LLDPTLVChassisID:
 			if len(v.Value) < 2 {
 				return errors.New("Malformed LinkLayerDiscovery ChassisID TLV")
@@ -855,7 +858,7 @@ func decodeLinkLayerDiscovery(data []byte, p gopacket.PacketBuilder) error {
 			c.Values = append(c.Values, v)
 		}
 	}
-	if c.ChassisID.Subtype == 0 || c.PortID.Subtype == 0 || !gotEnd {
+	if c.ChassisID.Subtype == 0 || c.PortID.Subtype == 0 {
 		return errors.New("Missing mandatory LinkLayerDiscovery TLV")
 	}
 	c.Contents = data

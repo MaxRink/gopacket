@@ -181,3 +181,33 @@ func TestLLDPDecodeMgmtAddressLength(t *testing.T) {
 		}()
 	}
 }
+
+// IEEE 802.1AB-2016: Chassis ID, Port ID and TTL are the first three TLVs,
+// in this order, each exactly once; the End TLV is optional.
+func TestLLDPMandatoryTLVs(t *testing.T) {
+	name := lldpTLV(LLDPTLVSysName, 's', 'w', '1')
+	for _, c := range []struct {
+		name string
+		data []byte
+		ok   bool
+	}{
+		{"valid", lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, lldpTestEnd), true},
+		{"no End TLV", lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, name), true},
+		{"only the mandatory TLVs", lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL), true},
+		{"port before chassis", lldpCat(lldpTestPort, lldpTestChassis, lldpTestTTL, lldpTestEnd), false},
+		{"TTL after an optional TLV", lldpCat(lldpTestChassis, lldpTestPort, name, lldpTestTTL, lldpTestEnd), false},
+		{"no TTL TLV", lldpCat(lldpTestChassis, lldpTestPort, name, lldpTestEnd), false},
+		{"two TTL TLVs", lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, lldpTLV(LLDPTLVTTL, 0, 0), lldpTestEnd), false},
+		{"two chassis ID TLVs", lldpCat(lldpTestChassis, lldpTestPort, lldpTestTTL, lldpTestChassis, lldpTestEnd), false},
+	} {
+		p := gopacket.NewPacket(c.data, LayerTypeLinkLayerDiscovery, gopacket.Default)
+		l, ok := p.Layer(LayerTypeLinkLayerDiscovery).(*LinkLayerDiscovery)
+		if ok != c.ok {
+			t.Errorf("%s: decoded %v, want %v (error %v)", c.name, ok, c.ok, p.ErrorLayer())
+			continue
+		}
+		if ok && (l.TTL != 120 || string(l.PortID.ID) != "Eth1") {
+			t.Errorf("%s: TTL %d port %q", c.name, l.TTL, l.PortID.ID)
+		}
+	}
+}
