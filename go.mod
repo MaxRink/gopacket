@@ -1,10 +1,10 @@
 module github.com/gopacket/gopacket
 
-go 1.25.0
+go 1.26.0
 
 require (
-	github.com/vishvananda/netlink v1.1.0
-	github.com/vishvananda/netns v0.0.0-20211101163701-50045581ed74
-	golang.org/x/net v0.55.0
-	golang.org/x/sys v0.45.0
+	github.com/vishvananda/netlink v1.3.1
+	github.com/vishvananda/netns v0.0.5
+	golang.org/x/net v0.61.0
+	golang.org/x/sys v0.49.0
 )
